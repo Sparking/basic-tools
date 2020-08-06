@@ -6,15 +6,15 @@ ARFLAGS   := rc
 CFLAGS    := -g -O0
 CPPFLAGS  := -std=gnu99 -Wall -Werror -I. -MMD
 LDFLAGS   := -g -L$(CURDIR)
-LIBS      := -lm -lreadline
+LIBS      := -lm
 
-lib_src := linkedlist.c mathlib.c port_memory.c queue.c rbtree.c
+lib_src := linkedlist.c mathlib.c port_memory.c queue.c rbtree.c tree234.c memcache.c
 lib_obj := $(patsubst %.c,%.o,$(lib_src))
 lib_dep := $(patsubst %.c,%.d,$(lib_src))
 lib_out := libcommon.a
 
 ###
-user_src := sample/demo.c
+user_src := samples/memcache.c
 user_obj := $(patsubst %.c,%.o,$(user_src))
 user_dep := $(patsubst %.c,%.d,$(user_src))
 user_out := memory-tool-lite
