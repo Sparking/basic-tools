@@ -14,10 +14,10 @@ lib_dep := $(patsubst %.c,%.d,$(lib_src))
 lib_out := libcommon.a
 
 ###
-user_src := samples/memcache.c
+user_src := tz.c
 user_obj := $(patsubst %.c,%.o,$(user_src))
 user_dep := $(patsubst %.c,%.d,$(user_src))
-user_out := memory-tool-lite
+user_out := run.exe
 ###
 
 define compile_ar

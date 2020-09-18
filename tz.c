@@ -9,6 +9,47 @@
 #include <unistd.h>
 #define TZNAME_SIZE     32
 
+enum {
+    TZ_NO_ERROR             = 0,
+    TZ_ERROR_INVAL_PARAM    = -1,
+    TZ_ERROR_NO_STDZONE     = -2,
+    TZ_ERROR_NO_DSTZONE     = -3,
+    TZ_ERROR_NO_DST_END_SET = -4,
+    TZ_ERROR_NO_BUFF        = -5,
+    TZ_ERROR_PARSE_STDINFO  = -6,
+    TZ_ERROR_PARSE_DSTINFO  = -7,
+    TZ_ERROR_PARSE_RULE     = -8,
+    TZ_ERROR_OPEN_FILE      = -9,
+    TZ_ERROR_SAVE_FILE      = -10,
+    TZ_ERROR_MAX            = -11
+};
+
+static const char *tz_error_to_string(const int err)
+{
+    int index;
+    static const char *reason[12] = {
+        "\0",
+        "invalid parameter",
+        "not found valid standard zone",
+        "not found valid daylight saving time",
+        "not found the valid end rule of daylight saving time",
+        "no enough buffer",
+        "fail to parse standard zone info",
+        "fail to parse daylight saving time info",
+        "fail to parse daylight saving time rules",
+        "fail to open file",
+        "fail to save file"
+    };
+
+    if (err > 0 || err <= TZ_ERROR_MAX) {
+        return "unknown cause";
+    } else {
+        index = -err;
+    }
+
+    return reason[index];
+}
+
 typedef struct {
     signed short   sign;    /* +1, -1 */
     unsigned short h;
@@ -128,7 +169,6 @@ static bool parse_offset(tz_info_t *info, const char **tzp, int whichrule)
 
     offset = (whichrule == 0) ? &info->std.offset : &info->dst.offset;
     memset(offset, 0, sizeof(*offset));
-    /* 正负颠倒 */
     offset->sign = -1;
     if (*tz == '-' || *tz == '+') {
         offset->sign = *tz++ == '-' ? 1 : -1;
@@ -229,48 +269,54 @@ static bool parse_rule(tz_info_t *info, const char **tzp, int whichrule)
     return true;
 }
 
-/* std offset[dst[offset][,start[/time][,end[/time]]] */
-int str2tz(tz_info_t *tz, const char *str)
+static int str2tz(tz_info_t *tz, const char *str)
 {
     if (tz == NULL || str == NULL) {
-        return -1;
+        return TZ_ERROR_INVAL_PARAM;
     }
 
     memset(tz, 0, sizeof(tz_info_t));
     if (!parse_tzname(tz, &str, 0)) {
-        return -1;
+        return TZ_ERROR_PARSE_STDINFO;
     }
 
     tz->mask |= F_STDZONE_SET;
-    if (!parse_offset(tz, &str, 0)) {
+    if (*str == '\0') {        
         tz->std.offset.sign = 1;
         tz->std.offset.h = 0;
         tz->std.offset.m = 0;
         tz->std.offset.s = 0;
-        return 0;
+        return TZ_NO_ERROR;
+    } else if (!parse_offset(tz, &str, 0)) {
+        return TZ_ERROR_PARSE_STDINFO;
     }
 
-    memcpy(&tz->dst, &tz->std, sizeof(tz->dst));
-    if (*str != '\0') {
-        if (parse_tzname(tz, &str, 1)) {
-            parse_offset(tz, &str, 1);
-            tz->mask |= F_DSTZONE_SET;
-            if (*str == '\0' || (str[0] == ',' && str[1] == '\0')) {
-                return 0;
-            }
-        } else if (*str != ',') {
-            return -1;
-        }
-
-        if (parse_rule(tz, &str, 0)) {
-            tz->mask |= F_DST_START_SET;
-            if (parse_rule(tz, &str, 1)) {
-                tz->mask |= F_DST_END_SET;
-            }
-        }
+    if (*str == '\0') {
+        return TZ_NO_ERROR;
     }
 
-    return 0;
+    if (parse_tzname(tz, &str, 1)) {
+        parse_offset(tz, &str, 1);
+        tz->mask |= F_DSTZONE_SET;
+    }
+
+    if (*str == '\0' || (str[0] == ',' && str[1] == '\0')) {
+        return TZ_NO_ERROR;
+    } else if (!(tz->mask & F_DSTZONE_SET)) {
+        return TZ_ERROR_PARSE_DSTINFO;
+    }
+
+    if (!parse_rule(tz, &str, 0)) {
+        return TZ_ERROR_PARSE_RULE;
+    }
+
+    tz->mask |= F_DST_START_SET;
+    if (!parse_rule(tz, &str, 1)) {
+        return TZ_ERROR_PARSE_RULE;
+    }
+    tz->mask |= F_DST_END_SET;
+
+    return TZ_NO_ERROR;
 }
 
 static int tz_offset_to_string(char *str, size_t n, const tz_offset_t *off, int r)
@@ -360,36 +406,6 @@ static int tz_rule_to_string(char *str, size_t n, const tz_rule_t *rule)
     return ret;
 }
 
-enum {
-    TZ_ERROR_NONE = 0,
-    TZ_ERROR_INVAL_PARAM = -1,
-    TZ_ERROR_NO_STDZONE = -2,
-    TZ_ERROR_NO_DSTZONE = -3,
-    TZ_ERROR_NO_DST_END_SET = -4,
-    TZ_ERROR_NO_MEME = -5,
-};
-
-static const char *tz_convert_err2str(const int err)
-{
-    int index;
-    static const char *reason[7] = {
-        "\0",
-        "invalid param",
-        "not found valid standard zone",
-        "not found valid daylight saving time",
-        "not found the valid end rule of daylight saving time",
-        "unknown cause"
-    };
-
-    if (err > 0 || err < TZ_ERROR_NO_MEME) {
-        index = 6;
-    } else {
-        index = -err;
-    }
-
-    return reason[index];
-}
-
 int tz_convert_string(char *str, size_t n, const tz_info_t *tz)
 {
     int ret;
@@ -406,13 +422,13 @@ int tz_convert_string(char *str, size_t n, const tz_info_t *tz)
 
     mask &= ~F_STDZONE_SET;
     if ((ret = tz_zone_to_string(str, n, &tz->std)) < 0) {
-        return TZ_ERROR_NO_MEME;
+        return TZ_ERROR_NO_BUFF;
     }
 
     n -= ret;
     str += ret;
     if (n == 0) {
-        return (mask == 0) ? TZ_ERROR_NONE : TZ_ERROR_NO_MEME; 
+        return (mask == 0) ? TZ_NO_ERROR : TZ_ERROR_NO_BUFF; 
     }
 
     if (mask & F_DSTZONE_SET) {
@@ -424,12 +440,12 @@ int tz_convert_string(char *str, size_t n, const tz_info_t *tz)
         n -= ret;
         str += ret;
         if (n == 0) {
-            return (mask == 0) ? TZ_ERROR_NONE : TZ_ERROR_NO_MEME; 
+            return (mask == 0) ? TZ_NO_ERROR : TZ_ERROR_NO_BUFF; 
         }
     }
 
     if (!(mask & F_DST_START_SET)) {
-        return TZ_ERROR_NONE;
+        return TZ_NO_ERROR;
     }
 
     if (!(tz->mask & F_DSTZONE_SET)) {
@@ -440,13 +456,13 @@ int tz_convert_string(char *str, size_t n, const tz_info_t *tz)
     *str++ = ',';
     mask &= ~F_DST_START_SET;
     if ((ret = tz_rule_to_string(str, n, &tz->start)) < 0) {
-        return TZ_ERROR_NO_MEME;
+        return TZ_ERROR_NO_BUFF;
     }
 
     n -= ret;
     str += ret;
     if (n == 0) {
-        return (mask == 0) ? TZ_ERROR_NONE : TZ_ERROR_NO_MEME; 
+        return (mask == 0) ? TZ_NO_ERROR : TZ_ERROR_NO_BUFF; 
     }
 
     if (!(mask & F_DST_END_SET)) {
@@ -457,28 +473,29 @@ int tz_convert_string(char *str, size_t n, const tz_info_t *tz)
     *str++ = ',';
     mask &= ~F_DST_END_SET;
     if ((ret = tz_rule_to_string(str, n, &tz->end)) < 0) {
-        return TZ_ERROR_NO_MEME;
+        return TZ_ERROR_NO_BUFF;
     }
 
-    return TZ_ERROR_NONE;
+    return TZ_NO_ERROR;
 }
 
+#define WEEKDAY2MONTHDAY(w,d)   (((w) - 1) * 7 + (d) + 1)
+
+/* Leap days are not counted */
 static const unsigned short julian_days[13] = {
     0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365
 };
 
-#define WEEKDAY2MONTHDAY(w,d)   (((w) - 1) * 7 + (d) + 1)
+static const unsigned short leap_days[13] = {
+    0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366
+};
 
-static int get_month_in_julian_days(const unsigned short d)
+static int get_month_in_tables(const unsigned short *tables, const unsigned short d)
 {
     int m;
 
-    if (d > 365 || d == 0) {
-        return -1;
-    }
-
     for (m = 1; m < 13; ++m) {
-        if (d <= julian_days[m]) {
+        if (d <= tables[m]) {
             break;
         }
     }
@@ -486,26 +503,58 @@ static int get_month_in_julian_days(const unsigned short d)
     return m - 1;
 }
 
+static inline int get_month_in_julian_days(const unsigned short d)
+{
+    return get_month_in_tables(julian_days, d);
+}
+
+static inline int get_month_in_leap_days(const unsigned short d)
+{
+    return get_month_in_tables(leap_days, d);
+}
+
 static int dst_rule_fprintf(FILE *fp, const tz_rule_t *rule, const tz_offset_t *off)
 {
     int ret;
-    int month;
     int day;
+    int month;
+    int yeari;
+    static const char *year_type[] = {"-", "noleap", "leap"};
     static const char *tip_week[] =
             {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
     static const char *tip_mon[] = 
             {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
     switch (rule->type) {
-    case J0:
-        ret = 0;
-        break;
-    case J1:
-        if ((month = get_month_in_julian_days(rule->d)) < 0) {
-            ret = -1;
+    case J0:    /* 0 - 365 */
+        yeari = (rule->d >= 59) ? 1 : 0;
+        day = rule->d + 1;
+        month = get_month_in_julian_days(day);
+        day = day - julian_days[month];
+        if ((ret = fprintf(fp,
+                "Rule RUIJIE minimum maximum %s %s\t%d\t%c%02hu:%02hu:%02hu\t%c%02hu:%02hu:%02hu\t-\n",
+                year_type[yeari], tip_mon[month], day,
+                rule->offset.sign < 0 ? '-' : '+', rule->offset.h, rule->offset.m, rule->offset.s,
+                off->sign < 0 ? '-' : '+', off->h, off->m, off->s)) < 0) {
             break;
         }
 
+        if (rule->d < 59) {
+            break;
+        }
+
+        yeari = 2;
+        day = rule->d + 1;
+        month = get_month_in_leap_days(day);
+        day = day - leap_days[month];
+        ret = fprintf(fp,
+                "Rule RUIJIE minimum maximum %s %s\t%d\t%c%02hu:%02hu:%02hu\t%c%02hu:%02hu:%02hu\t-\n",
+                year_type[yeari], tip_mon[month], day,
+                rule->offset.sign < 0 ? '-' : '+', rule->offset.h, rule->offset.m, rule->offset.s,
+                off->sign < 0 ? '-' : '+', off->h, off->m, off->s);
+        break;
+    case J1:    /* 1 - 365 */
+        month = get_month_in_julian_days(rule->d);
         day = rule->d - julian_days[month];
         /* Rule NAME FROM TO TYPE IN ON AT SAVE LETTER/S */
         ret = fprintf(fp,
@@ -532,68 +581,66 @@ static int dst_rule_fprintf(FILE *fp, const tz_rule_t *rule, const tz_offset_t *
 
 int str2tzfile(const char *path, const char *str, char *format, const size_t n)
 {
+    int ret;
     FILE *fp;
     tz_info_t tz;
 
     if (path == NULL || str == NULL || format == NULL) {
-        return -1;
+        return TZ_ERROR_INVAL_PARAM;
     }
 
-    if (str2tz(&tz, str) != 0) {
-        return -1;
-    }
-
-    if (tz_convert_string(format, n, &tz) != TZ_ERROR_NONE) {
-        return -1;
+    if ((ret = str2tz(&tz, str)) != TZ_NO_ERROR
+            || (ret = tz_convert_string(format, n, &tz)) != TZ_NO_ERROR) {
+        return ret;
     }
 
     unlink(path);
     if ((fp = fopen(path, "w")) == NULL) {
-        return -1;
+        return TZ_ERROR_OPEN_FILE;
     }
 
     if (tz.mask & F_DST_START_SET) {
-        dst_rule_fprintf(fp, &tz.start, &tz.dst.offset);
+        if (dst_rule_fprintf(fp, &tz.start, &tz.dst.offset) < 0) {
+            fclose(fp);
+            return TZ_ERROR_SAVE_FILE;
+        }
+
         memset(&tz.dst.offset, 0, sizeof(tz.dst.offset));
-        dst_rule_fprintf(fp, &tz.end, &tz.dst.offset);
-        fputc('\n', fp);
+        if (dst_rule_fprintf(fp, &tz.end, &tz.dst.offset) < 0) {
+            fclose(fp);
+            return TZ_ERROR_SAVE_FILE;
+        }
     }
 
     /* Zone NAME UTOFF RULES FORMAT [UNTIL] */
-    fprintf(fp,
+    if (fprintf(fp,
             "Zone localtime %c%02hu:%02hu:%02hu RUIJIE %s/%s\n",
             tz.std.offset.sign < 0 ? '-' : '+', tz.std.offset.h, tz.std.offset.m, tz.std.offset.s,
-            tz.std.name, tz.dst.name);
+            tz.std.name, tz.dst.name) < 0) {
+        fclose(fp);
+        return TZ_ERROR_SAVE_FILE;
+    }
     fflush(fp);
     fsync(fileno(fp));
     fclose(fp);
 
-    return 0;
+    return TZ_NO_ERROR;
 }
 
 int main(int argc, char *argv[])
 {
     int ret;
-    tz_info_t tz;
     char buf[256 + 1];
 
     if (argc < 2) {
         return -1;
     }
 
-    if (str2tz(&tz, argv[1]) != 0) {
-        return -1;
-    }
-
-    if ((ret = tz_convert_string(buf, sizeof(buf), &tz)) != TZ_ERROR_NONE) {
-        fprintf(stderr, "string is invalid, since %s\n", tz_convert_err2str(ret));
+    if ((ret = str2tzfile("/Workspace/xxxx.tz", argv[1], buf, sizeof(buf))) != 0) {
+        fprintf(stderr, "setting timezone failed, since %s\n", tz_error_to_string(ret));
         return -1;
     }
     puts(buf);
-
-    if (str2tzfile("/Workspace/xxxx.tz", argv[1], buf, sizeof(buf)) < 0) {
-        return -1;
-    }
 
     return 0;
 }
