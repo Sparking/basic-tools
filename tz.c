@@ -399,7 +399,7 @@ static int tz_rule_to_string(char *str, size_t n, const tz_rule_t *rule)
             return -1;
         }
 
-        strncpy(str + ret, buf, off + 1);
+        memcpy(str + ret, buf, off + 2);
         ret += off + 1;
     }
 
@@ -513,7 +513,7 @@ static inline int get_month_in_leap_days(const unsigned short d)
     return get_month_in_tables(leap_days, d);
 }
 
-static int dst_rule_fprintf(FILE *fp, const tz_rule_t *rule, const tz_offset_t *off)
+static int dst_rule_fprintf(FILE *fp, const tz_rule_t *rule, const tz_offset_t *off, int is_start)
 {
     int ret;
     int day;
@@ -527,26 +527,31 @@ static int dst_rule_fprintf(FILE *fp, const tz_rule_t *rule, const tz_offset_t *
 
     switch (rule->type) {
     case J0:    /* 0 - 365 */
-        yeari = (rule->d >= 59) ? 1 : 0;
+        if (rule->d >= 59) {
+            yeari = 2;
+            day = rule->d + 1;
+            month = get_month_in_leap_days(day);
+            day = day - leap_days[month];
+            if ((ret = fprintf(fp,
+                    "Rule RUIJIE minimum maximum %s %s\t%d\t%c%02hu:%02hu:%02hu\t%c%02hu:%02hu:%02hu\t-\n",
+                    year_type[yeari], tip_mon[month], day,
+                    rule->offset.sign < 0 ? '-' : '+', rule->offset.h, rule->offset.m, rule->offset.s,
+                    off->sign < 0 ? '-' : '+', off->h, off->m, off->s)) < 0) {
+                break;
+            }
+
+            if (rule->d == 365) {
+                break;
+            }
+
+            yeari = 1;
+        } else {
+            yeari = 0;
+        }
+
         day = rule->d + 1;
         month = get_month_in_julian_days(day);
         day = day - julian_days[month];
-        if ((ret = fprintf(fp,
-                "Rule RUIJIE minimum maximum %s %s\t%d\t%c%02hu:%02hu:%02hu\t%c%02hu:%02hu:%02hu\t-\n",
-                year_type[yeari], tip_mon[month], day,
-                rule->offset.sign < 0 ? '-' : '+', rule->offset.h, rule->offset.m, rule->offset.s,
-                off->sign < 0 ? '-' : '+', off->h, off->m, off->s)) < 0) {
-            break;
-        }
-
-        if (rule->d < 59) {
-            break;
-        }
-
-        yeari = 2;
-        day = rule->d + 1;
-        month = get_month_in_leap_days(day);
-        day = day - leap_days[month];
         ret = fprintf(fp,
                 "Rule RUIJIE minimum maximum %s %s\t%d\t%c%02hu:%02hu:%02hu\t%c%02hu:%02hu:%02hu\t-\n",
                 year_type[yeari], tip_mon[month], day,
@@ -566,8 +571,8 @@ static int dst_rule_fprintf(FILE *fp, const tz_rule_t *rule, const tz_offset_t *
     case M:
         /* Rule NAME FROM TO TYPE IN ON AT SAVE LETTER/S */
         ret = fprintf(fp,
-                "Rule RUIJIE minimum maximum - %s\t%s>=%d\t%c%02hu:%02hu:%02hu\t%c%02hu:%02hu:%02hu\t-\n",
-                tip_mon[rule->m - 1], tip_week[rule->d], WEEKDAY2MONTHDAY(rule->n, rule->d),
+                "Rule RUIJIE minimum maximum - %s\t%s%c=%d\t%c%02hu:%02hu:%02hu\t%c%02hu:%02hu:%02hu\t-\n",
+                tip_mon[rule->m - 1], tip_week[rule->d], is_start ? '>' : '<', WEEKDAY2MONTHDAY(rule->n, rule->d),
                 rule->offset.sign < 0 ? '-' : '+', rule->offset.h, rule->offset.m, rule->offset.s,
                 off->sign < 0 ? '-' : '+', off->h, off->m, off->s);
         break;
@@ -600,13 +605,13 @@ int str2tzfile(const char *path, const char *str, char *format, const size_t n)
     }
 
     if (tz.mask & F_DST_START_SET) {
-        if (dst_rule_fprintf(fp, &tz.start, &tz.dst.offset) < 0) {
+        if (dst_rule_fprintf(fp, &tz.start, &tz.dst.offset, 1) < 0) {
             fclose(fp);
             return TZ_ERROR_SAVE_FILE;
         }
 
         memset(&tz.dst.offset, 0, sizeof(tz.dst.offset));
-        if (dst_rule_fprintf(fp, &tz.end, &tz.dst.offset) < 0) {
+        if (dst_rule_fprintf(fp, &tz.end, &tz.dst.offset, 0) < 0) {
             fclose(fp);
             return TZ_ERROR_SAVE_FILE;
         }
@@ -636,7 +641,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    if ((ret = str2tzfile("/Workspace/xxxx.tz", argv[1], buf, sizeof(buf))) != 0) {
+    if ((ret = str2tzfile("/home/nassura/workspace/xxxx.tz", argv[1], buf, sizeof(buf))) != 0) {
         fprintf(stderr, "setting timezone failed, since %s\n", tz_error_to_string(ret));
         return -1;
     }

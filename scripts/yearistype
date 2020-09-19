@@ -1,0 +1,31 @@
+#! /bin/sh
+
+set -x
+
+is_noleap_year() {
+    return $((($1 % 4 == 0 && $1 % 100 != 0) || $1 % 400 == 0))
+}
+
+is_leap_year() {
+    is_noleap_year $1
+    return $(($? ^ 1))
+}
+
+year=$1
+type=$2
+case $type in
+"-")
+    exit 0
+    ;;
+"leap")
+    is_leap_year $year
+    exit $?
+    ;;
+"noleap")
+    is_noleap_year $year
+    exit $?
+    ;;
+*)
+    exit 0
+    ;;
+esac
