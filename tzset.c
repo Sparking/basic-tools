@@ -83,9 +83,9 @@ static const struct {
     {TZ_ERROR_NONE,                  "\0"},
     {TZ_ERROR_INTERNAL_ERROR,        "internal error"},
     {TZ_ERROR_INVALID_STD_NAME,      "invalid standard zone name"},
-    {TZ_ERROR_INVALID_STD_OFFSET,    "invalid standard zone offset"},
+    {TZ_ERROR_INVALID_STD_OFFSET,    "invalid standard zone offset(may out of -14 to +12)"},
     {TZ_ERROR_INVALID_DST_NAME,      "invalid daylight saving time name"},
-    {TZ_ERROR_INVALID_DST_OFFSET,    "invalid daylight saving time offset"},
+    {TZ_ERROR_INVALID_DST_OFFSET,    "invalid daylight saving time offset(may out of -14 to +12)"},
     {TZ_ERRPR_DST_TIME_OUT_OF_RANGE, "daylight saving time setting out of range"},
     {TZ_ERRPR_DST_TIME_CONFLICT,     "daylight saving time setting conflict"},
     {TZ_ERRPR_INVALID_FUNC_PARAM,    "invalid parameters"},
@@ -476,10 +476,6 @@ static int str2tz(tz_info_t *tz, const char *str)
         }
     }
 
-    if (*str == '\0' || (str[0] == ',' && str[1] == '\0')) {
-        return TZ_ERROR_NONE;
-    }
-
     if (!parse_rule(tz, &str, 0)) {
         return TZ_ERROR_WRONG_SYNTAX;
     }
@@ -795,7 +791,7 @@ int parse_posix_tzstring(const char *str, const char *path, char *format, const 
         return TZ_ERROR_INTERNAL_ERROR;
     }
     fflush(fp);
-    fsync(fileno(fp));
+    //fsync(fileno(fp));
     fclose(fp);
 
     return TZ_ERROR_NONE;
