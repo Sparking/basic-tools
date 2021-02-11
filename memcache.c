@@ -3,199 +3,163 @@
 #include <string.h>
 #include <pthread.h>
 #include "list.h"
-#include "tree234.h"
+#include "rbtree.h"
 #include "memcache.h"
 
 struct memcache_list {
     size_t alloc_size;
-    struct list_head allocated;
-    struct list_head cached;
+    struct rb_node rb;
+    struct hlist_head using;
+    struct hlist_head cached;
 };
 
 struct memcache_node {
     struct memcache_list *list;
-    struct list_head node;
+    struct hlist_node node;
     char data[0];
 };
 
-struct memcache_s {
+struct memcache_root {
     pthread_mutex_t mutex;
-    tree234 *list;
+    struct rb_root root;
 };
-
-static int memcache_list_compare(void *a, void *b)
-{
-    return (int)(((struct memcache_list *)a)->alloc_size - ((struct memcache_list *)b)->alloc_size);
-}
-
-static int memcache_list_compare_rel(void *a, void *b)
-{
-    int ret, rel;
-
-    ret = memcache_list_compare(a, b);
-    if (ret == 0) {
-        rel = REL234_EQ;
-    } else if (ret > 0) {
-        rel = REL234_GT;
-    } else {
-        rel = REL234_LT;
-    }
-
-    return rel;
-}
 
 memcache_t memcache_create(void)
 {
-    struct memcache_s *cache;
+    struct memcache_root *root;
 
-    cache = (struct memcache_s *)malloc(sizeof(struct memcache_s));
-    if (cache == NULL) {
-        return NULL;
+    root = (struct memcache_root *) malloc(sizeof(*root));
+    if (root) {
+        root->root = RB_ROOT;
+        pthread_mutex_init(&root->mutex, NULL);
     }
 
-    if (pthread_mutex_init(&cache->mutex, NULL) != 0) {
-        free(cache);
-        return NULL;
-    }
-
-    cache->list = newtree234(memcache_list_compare);
-    if (cache->list == NULL) {
-        pthread_mutex_destroy(&cache->mutex);
-        free(cache);
-        return NULL;
-    }
-
-    return (memcache_t)cache;
-}
-
-static struct memcache_list *get_memcache_list(tree234 *tree, const size_t size)
-{
-    struct memcache_list *list;
-    struct memcache_list e;
-
-    e.alloc_size = size;
-    list = find234(tree, &e, memcache_list_compare_rel);    
-    if (list != NULL) {
-        return list;
-    }
-
-    list = (struct memcache_list *)malloc(sizeof(struct memcache_list));
-    if (list == NULL) {
-        return NULL;
-    }
-
-    list->alloc_size = size;
-    INIT_LIST_HEAD(&list->allocated);
-    INIT_LIST_HEAD(&list->cached);
-    if (add234(tree, list) == NULL) {
-        free(list);
-        list = NULL;
-    }
-
-    return list;
+    return root;
 }
 
 void *memcache_alloc(memcache_t cache, const size_t size)
 {
-    void *value;
-    struct list_head *mnode;
-    struct memcache_node *node;
+    struct rb_node **rb;
+    struct rb_node *parent;
+    struct memcache_node *mem;
     struct memcache_list *list;
-    struct memcache_s *const ptr = cache;
+    struct memcache_root *root;
 
-    if (ptr == NULL || size == 0) {
+    if (!cache || !size)
+        return NULL;
+
+    root = (struct memcache_root *) cache;
+    pthread_mutex_lock(&root->mutex);
+    parent = NULL;
+    rb = &root->root.rb_node;
+    while (*rb != NULL) {
+        parent = *rb;
+        list = rb_entry(parent, struct memcache_list, rb);
+        if (list->alloc_size == size) {
+            goto drop_cache;
+        } else if (list->alloc_size < size) {
+            rb = &parent->rb_left;
+        } else {
+            rb = &parent->rb_right;
+        }
+    }
+
+    list = (struct memcache_list *) malloc(sizeof(struct memcache_list));
+    if (!list) {
+        pthread_mutex_unlock(&root->mutex);
         return NULL;
     }
 
-    value = NULL;
-    pthread_mutex_lock(&ptr->mutex);
-    list = get_memcache_list(ptr->list, size);
-    if (list == NULL) {
-        goto unlock;
+    list->alloc_size = size;
+    INIT_HLIST_HEAD(&list->using);
+    INIT_HLIST_HEAD(&list->cached);
+    rb_insert_color(&list->rb, &root->root);
+    rb_link_node(&list->rb, parent, rb);
+    goto new_node;
+
+drop_cache:
+    if (!hlist_empty(&list->cached)) {
+        mem = hlist_entry(list->cached.first, struct memcache_node, node);
+        hlist_del(&mem->node);
+        goto finish;        
     }
 
-    if (!list_empty(&list->cached)) {
-        mnode = list->cached.next;
-        list_del(mnode);
-        list_add(mnode, &list->allocated);
-        value = list_entry(mnode, struct memcache_node, node)->data;
-        goto unlock;
+new_node:
+    mem = (struct memcache_node *) malloc(sizeof(struct memcache_node) + size);
+    if (!mem) {
+        pthread_mutex_unlock(&root->mutex);
+        return NULL;
     }
 
-    node = (struct memcache_node *)malloc(sizeof(struct memcache_node));
-    if (node == NULL) {
-        goto unlock;
-    }
+    mem->list = list;
+finish:
+    hlist_add_head(&mem->node, &list->using);
+    pthread_mutex_unlock(&root->mutex);
 
-    list_add(&node->node, &list->allocated);
-    node->list = list;
-    value = node->data;
-unlock:
-    pthread_mutex_unlock(&ptr->mutex);
-
-    return value;
+    return mem->data;
 }
 
-void memcache_free(memcache_t cache, void *ptr)
+void memcache_free(void *ptr)
 {
+    struct memcache_node *mem;
+
+    if (ptr) {
+        mem = container_of(ptr, struct memcache_node, data);
+        hlist_del(&mem->node);
+        hlist_add_head(&mem->node, &mem->list->cached);
+    }
+}
+
+static void memcache_list_release(struct hlist_head *head)
+{
+    struct hlist_node *n;
     struct memcache_node *node;
-    struct memcache_s *const mem = cache;
 
-    if (mem == NULL || ptr == NULL) {
-        return;
-    }
+    hlist_for_each_entry(node, n, head, node)
+        free(node);
 
-    node = (struct memcache_node *)(ptr - offsetof(struct memcache_node, data));
-    pthread_mutex_lock(&mem->mutex);
-    list_del(&node->node);
-    list_add(&node->node, &node->list->cached);
-    pthread_mutex_unlock(&mem->mutex);
+    INIT_HLIST_HEAD(head);
 }
 
-void memcache_clear(memcache_t cache)
+void memcache_clear(memcache_t cache, bool del_empty_list)
 {
-    struct memcache_node *node, *n;
+    struct rb_node *rb;
     struct memcache_list *list;
-    struct memcache_s *const ptr = cache;
+    struct memcache_root *root;
 
-    if (ptr == NULL) {
-        return;
-    }
-
-    pthread_mutex_lock(&ptr->mutex);
-    for (list = NULL; (list = findrel234(ptr->list, list, NULL, REL234_GT)) != NULL;) {
-        list_for_each_entry_safe(node, n, &list->cached, node) {
-            list_del(&node->node);
-            free(node);
+    if (cache) {
+        root = (struct memcache_root *) cache;
+        pthread_mutex_lock(&root->mutex);
+        for (rb = rb_first(&root->root); rb;) {
+            list = rb_entry(rb, struct memcache_list, rb);
+            rb = rb_next(rb);
+            memcache_list_release(&list->cached);
+            if (del_empty_list && hlist_empty(&list->using)) {
+                rb_erase(&list->rb, &root->root);
+                free(list);
+            }
         }
+        pthread_mutex_unlock(&root->mutex);
     }
-    pthread_mutex_unlock(&ptr->mutex);
 }
 
 void memcache_destroy(memcache_t cache)
 {
-    struct memcache_node *node, *n;
+    struct rb_node *rb;
     struct memcache_list *list;
-    struct memcache_s *const ptr = cache;
+    struct memcache_root *root;
 
-    if (cache == NULL) {
-        return;
-    }
-
-    pthread_mutex_destroy(&ptr->mutex);
-    for (list = NULL; (list = findrel234(ptr->list, list, NULL, REL234_GT)) != NULL;) {
-        list_for_each_entry_safe(node, n, &list->allocated, node) {
-            list_del(&node->node);
-            free(node);
+    if (cache) {
+        root = (struct memcache_root *) cache;
+        pthread_mutex_destroy(&root->mutex);
+        for (rb = rb_first(&root->root); rb;) {
+            list = rb_entry(rb, struct memcache_list, rb);
+            rb = rb_next(rb);
+            rb_erase(&list->rb, &root->root);
+            memcache_list_release(&list->cached);
+            memcache_list_release(&list->using);
+            free(list);
         }
-
-        list_for_each_entry_safe(node, n, &list->cached, node) {
-            list_del(&node->node);
-            free(node);
-        }
-        del234(ptr->list, list);
-        free(list);
+        free(root);
     }
-    freetree234(ptr->list);
-    free(ptr);
 }

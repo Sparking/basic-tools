@@ -8,7 +8,7 @@ CPPFLAGS  := -std=gnu99 -Wall -Werror -I. -MMD
 LDFLAGS   := -g -L$(CURDIR)
 LIBS      := -lm
 
-lib_src := linkedlist.c mathlib.c port_memory.c queue.c rbtree.c tree234.c memcache.c tzset.c
+lib_src := linkedlist.c mathlib.c port_memory.c queue.c rbtree.c tree234.c memcache.c tzset.c hash_table.c
 lib_obj := $(patsubst %.c,%.o,$(lib_src))
 lib_dep := $(patsubst %.c,%.d,$(lib_src))
 lib_out := libcommon.a
