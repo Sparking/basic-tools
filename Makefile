@@ -14,7 +14,7 @@ lib_dep := $(patsubst %.c,%.d,$(lib_src))
 lib_out := libcommon.a
 
 ###
-user_src := samples/tz.c
+user_src := phy_meminfo_parser.c
 user_obj := $(patsubst %.c,%.o,$(user_src))
 user_dep := $(patsubst %.c,%.d,$(user_src))
 user_out := run.exe
