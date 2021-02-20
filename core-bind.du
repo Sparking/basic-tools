@@ -1,0 +1,14 @@
+[Area0 Mac txctl]       1
+[Area1 Mac txctl]       2
+[Area2 Mac txctl]       3
+[Area3 Mac txctl]       4
+[Layer2 lcore-du]       5
+[Mac low-priority]      4
+[Mac slot hdlr]         3
+[PHY BB]                6,7,8,9,10,11
+[PHY Driver]            12,13
+[PHY wls receive]       5
+[PR]                    2
+[Rlc master]            2
+[Rlc worker]            1,3
+[System Tasks]          0

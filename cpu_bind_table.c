@@ -1,0 +1,110 @@
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "list.h"
+
+typedef struct {
+    struct list_head n;
+    int cpus_mask;
+    char type[0];
+} cpu_bind_info_t;
+
+static int read_cpu_bind_info(struct list_head *h, const char *file)
+{
+    int i;
+    unsigned int b;
+    FILE *fp;
+    char *ptr;
+    char *mark;
+    char *word;
+    char buf[256];
+    cpu_bind_info_t *info;
+
+    fp = fopen(file, "r");
+    if (!fp)
+        return -errno;
+
+    i = 0;
+    while (fgets(buf, sizeof(buf), fp) != NULL) {
+        if (*buf != '[')
+            continue;
+
+        ptr = strrchr(buf + 1, ']');
+        if (ptr == NULL) {
+            i = -EINVAL;
+            break;
+        }
+
+        info = (cpu_bind_info_t *) malloc(sizeof(cpu_bind_info_t) + (ptr - (buf + 1)));
+        if (!info) {
+            i = -errno;
+            break;
+        }
+
+        *ptr = '\0';
+        (void) memcpy(info->type, buf + 1, ptr - (buf + 1));
+        ptr++;
+        info->cpus_mask = 0;
+        mark = NULL;
+        for (; (word = strtok_r(ptr, ",", &mark)) != NULL; ptr = NULL) {
+            b = atoi(word);
+            info->cpus_mask |= 1u << b;
+        }
+        list_add_tail(&info->n, h);
+
+        i++;
+    }
+    (void) fclose(fp);
+
+    return i;
+}
+
+static void show_list(unsigned int mask)
+{
+    unsigned int i;
+    unsigned int next;
+
+    for (i = 0; mask; i++) {
+        next = mask >> 1;
+        if (mask & 1) {
+            printf("%d", i);
+            if (next)
+                printf(",");
+        }
+        mask = next;
+    }
+}
+
+static void show(struct list_head *h)
+{
+    cpu_bind_info_t *info, *tmp;
+
+    list_for_each_entry_safe(info, tmp, h, n) {
+        printf("%-18s : ", info->type);
+        show_list(info->cpus_mask);
+        putchar('\n');
+        free(info);
+    }
+
+    INIT_LIST_HEAD(h);
+}
+
+int main(int argc, char *argv[])
+{
+    int n;
+    struct list_head h;
+
+    if (argc <= 1)
+        return -1;
+
+    INIT_LIST_HEAD(&h);
+    n = read_cpu_bind_info(&h, argv[1]);
+    if (n < 0) {
+        return n;
+    }
+
+    show(&h);
+
+    return 0;
+}
