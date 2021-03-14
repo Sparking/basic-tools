@@ -10,7 +10,7 @@ size_t base64_encode_buffer_size(size_t len, bool break_line)
 {
     len = ((len + 5) / 3) << 2;
     if (break_line)
-        len += (len + 15) >> 4;
+        len += (len + 63) >> 6;
 
     return len;
 }
@@ -34,7 +34,7 @@ size_t base64_encode(char *out, const void *in, size_t n, base64_options_t optio
         i -= 3;
         p += 3;
         o += 4;
-        if ((options & Base64InsertLineBreaks) && (o & 15) == 0 && i)
+        if ((options & Base64InsertLineBreaks) && (o & 63) == 0 && i)
             *out++ = '\n';
     }
 
@@ -105,7 +105,7 @@ size_t base64_decode(void *out, const char *in, size_t n, base64_options_t optio
     uint8_t a, b, c, d;
     uint8_t A, B, C, D;
     unsigned char *p;
-    const int8_t *map = reverse_alpabet[(options & Base64UseUrlAlphabet)];
+    const int8_t *map = reverse_alpabet[options & Base64UseUrlAlphabet];
 
     p = (unsigned char *) out;
     for (o = 0, i = 0; i < n;) {
