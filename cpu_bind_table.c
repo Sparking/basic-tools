@@ -76,14 +76,51 @@ static void show_list(unsigned int mask)
     }
 }
 
+
+static int mask2list(char *buf, size_t nbuf, char delc, unsigned int mask)
+{
+    char *ptr;
+    int ret;
+    int left;
+    unsigned int i;
+    unsigned int next;
+
+    ptr = buf;
+    left = nbuf;
+    for (i = 0; mask; i++) {
+        next = mask >> 1;
+        if (mask & 1) {
+            ret = snprintf(ptr, left, "%d", i);
+            if (ret >= left || ret < 0)
+                return -1;
+
+            ptr += ret;
+            left -= ret;
+            if (next) {
+                if (left < 1)
+                    return -1;
+
+                *ptr++ = ',';
+                *ptr = '\0';
+                left -= 1;
+            }
+        }
+        mask = next;
+    }
+
+    return 0;
+}
+
 static void show(struct list_head *h)
 {
     cpu_bind_info_t *info, *tmp;
+    char buf[256];
 
     list_for_each_entry_safe(info, tmp, h, n) {
         printf("%-18s : ", info->type);
         show_list(info->cpus_mask);
-        putchar('\n');
+        mask2list(buf, sizeof(buf), ',', info->cpus_mask);
+        printf("\n\t%s\n", buf);
         free(info);
     }
 
